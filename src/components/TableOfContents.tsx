@@ -36,14 +36,17 @@ function buildTocTree(entries: Record<string, unknown>[]): TocNode[] {
     const depth = Number(entry.depth);
     const node: TocNode = { entry, children: [] };
 
-    while (stack.length > 0 && Number(stack[stack.length - 1].entry.depth) >= depth) {
+    // 弹出栈中深度 >= 当前深度的节点
+    let top = stack[stack.length - 1];
+    while (top !== undefined && Number(top.entry.depth) >= depth) {
       stack.pop();
+      top = stack[stack.length - 1];
     }
 
-    if (stack.length === 0) {
+    if (top === undefined) {
       roots.push(node);
     } else {
-      stack[stack.length - 1].children.push(node);
+      top.children.push(node);
     }
     stack.push(node);
   }
@@ -70,7 +73,7 @@ function renderTocNodes(nodes: TocNode[]): unknown[] {
 }
 
 /* ------------------------------------------------------------------ */
-/* 滚动联动脚本：监听正文 h2，滚动到时展开其子标题                     */
+/* 滚动联动脚本：进入 h2 区域时展开其子级，离开时收起                  */
 /* ------------------------------------------------------------------ */
 const tocScrollScript = `
 document.addEventListener("nav", () => {
@@ -101,6 +104,8 @@ document.addEventListener("nav", () => {
 
         if (entry.isIntersecting) {
           sublist.classList.add("expanded");
+        } else {
+          sublist.classList.remove("expanded");
         }
       });
     },
@@ -191,7 +196,6 @@ export default ((opts?: Partial<Options>) => {
     if (!fileData?.toc) {
       return null;
     }
-    const tree = buildTocTree(fileData.toc);
     return (
       <details class="toc" open={!fileData.collapseToc}>
         <summary>
