@@ -20,6 +20,107 @@ const defaultOptions: Options = {
   layout: "modern",
 };
 
+/* ------------------------------------------------------------------ */
+/* 把扁平的 toc 条目数组转换成嵌套树结构                               */
+/* ------------------------------------------------------------------ */
+interface TocNode {
+  entry: Record<string, unknown>;
+  children: TocNode[];
+}
+
+function buildTocTree(entries: Record<string, unknown>[]): TocNode[] {
+  const roots: TocNode[] = [];
+  const stack: TocNode[] = [];
+
+  for (const entry of entries) {
+    const depth = Number(entry.depth);
+    const node: TocNode = { entry, children: [] };
+
+    while (stack.length > 0 && Number(stack[stack.length - 1].entry.depth) >= depth) {
+      stack.pop();
+    }
+
+    if (stack.length === 0) {
+      roots.push(node);
+    } else {
+      stack[stack.length - 1].children.push(node);
+    }
+    stack.push(node);
+  }
+  return roots;
+}
+
+/* 递归渲染一个目录节点及其子节点 */
+function renderTocNodes(nodes: TocNode[]): unknown[] {
+  return nodes.map((node) => {
+    const slug = String(node.entry.slug);
+    const depth = String(node.entry.depth);
+    const text = String(node.entry.text);
+    return (
+      <li key={slug} class={`depth-${depth}`}>
+        <a href={`#${slug}`} data-for={slug}>
+          {text}
+        </a>
+        {node.children.length > 0 && (
+          <ul class="toc-sublist">{renderTocNodes(node.children)}</ul>
+        )}
+      </li>
+    );
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* 滚动联动脚本：监听正文 h2，滚动到时展开其子标题                     */
+/* ------------------------------------------------------------------ */
+const tocScrollScript = `
+document.addEventListener("nav", () => {
+  if (window.__tocScrollObserver) {
+    window.__tocScrollObserver.disconnect();
+    window.__tocScrollObserver = null;
+  }
+
+  const h2Headings = document.querySelectorAll("article h2[id], .markdown-preview-view h2[id], main h2[id]");
+  if (h2Headings.length === 0) return;
+
+  const observer = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((entry) => {
+        const id = entry.target.id;
+        if (!id) return;
+
+        const tocLink = document.querySelector(
+          'ul.toc-content a[href="#' + CSS.escape(id) + '"]'
+        );
+        if (!tocLink) return;
+
+        const li = tocLink.closest("li");
+        if (!li) return;
+
+        const sublist = li.querySelector(":scope > ul.toc-sublist");
+        if (!sublist) return;
+
+        if (entry.isIntersecting) {
+          sublist.classList.add("expanded");
+        }
+      });
+    },
+    { rootMargin: "0px 0px -70% 0px", threshold: 0 }
+  );
+
+  h2Headings.forEach((h2) => observer.observe(h2));
+  window.__tocScrollObserver = observer;
+});
+
+document.addEventListener("nav", () => {
+  window.addEventListener("beforeunload", () => {
+    if (window.__tocScrollObserver) {
+      window.__tocScrollObserver.disconnect();
+      window.__tocScrollObserver = null;
+    }
+  });
+});
+`;
+
 let numTocs = 0;
 export default ((opts?: Partial<Options>) => {
   const layout = opts?.layout ?? defaultOptions.layout;
@@ -32,6 +133,7 @@ export default ((opts?: Partial<Options>) => {
     }
 
     const id = `toc-${numTocs++}`;
+    const tree = buildTocTree(fileData.toc);
     return (
       <div class={classNames("toc")}>
         <button
@@ -60,19 +162,18 @@ export default ((opts?: Partial<Options>) => {
           id={id}
           class={fileData.collapseToc ? "collapsed toc-content" : "toc-content"}
         >
-          {fileData.toc.map((tocEntry: Record<string, unknown>) => {
-            const slug = String(tocEntry.slug);
-            const depth = String(tocEntry.depth);
-            const text = String(tocEntry.text);
-            return (
-              <li key={slug} class={`depth-${depth}`}>
-                <a href={`#${slug}`} data-for={slug}>
-                  {text}
-                </a>
-              </li>
-            );
-          })}
+          {renderTocNodes(tree)}
         </OverflowList>
+        <style>{`
+          ul.toc-content ul.toc-sublist {
+            display: none;
+            padding-left: 1rem;
+            list-style: none;
+          }
+          ul.toc-content ul.toc-sublist.expanded {
+            display: block;
+          }
+        `}</style>
       </div>
     );
   };
@@ -81,6 +182,7 @@ export default ((opts?: Partial<Options>) => {
   TableOfContents.afterDOMLoaded = concatenateResources(
     script,
     overflowListAfterDOMLoaded,
+    tocScrollScript,
   ) as string;
 
   const LegacyTableOfContents: QuartzComponent = (props: QuartzComponentProps) => {
@@ -89,6 +191,7 @@ export default ((opts?: Partial<Options>) => {
     if (!fileData?.toc) {
       return null;
     }
+    const tree = buildTocTree(fileData.toc);
     return (
       <details class="toc" open={!fileData.collapseToc}>
         <summary>
