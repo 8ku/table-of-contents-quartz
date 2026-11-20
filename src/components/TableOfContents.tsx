@@ -73,54 +73,81 @@ function renderTocNodes(nodes: TocNode[]): unknown[] {
 }
 
 /* ------------------------------------------------------------------ */
-/* 滚动联动脚本：进入 h2 区域时展开其子级，离开时收起                  */
+/* 滚动联动脚本：进入 h2 章节（含其下 h3/h4）时展开，离开章节后收起    */
 /* ------------------------------------------------------------------ */
 const tocScrollScript = `
 document.addEventListener("nav", () => {
-  if (window.__tocScrollObserver) {
-    window.__tocScrollObserver.disconnect();
-    window.__tocScrollObserver = null;
+  if (window.__tocScrollCleanup) {
+    window.__tocScrollCleanup();
+    window.__tocScrollCleanup = null;
   }
 
-  const h2Headings = document.querySelectorAll("article h2[id], .markdown-preview-view h2[id], main h2[id]");
+  const h2Headings = Array.from(
+    document.querySelectorAll("article h2[id], .markdown-preview-view h2[id], main h2[id]")
+  );
   if (h2Headings.length === 0) return;
 
-  const observer = new IntersectionObserver(
-    (entries) => {
-      entries.forEach((entry) => {
-        const id = entry.target.id;
-        if (!id) return;
+  // 预先拿到每个 h2 的目录项子列表
+  const entries = h2Headings.map((h2) => {
+    const id = h2.id;
+    const tocLink = document.querySelector(
+      'ul.toc-content a[href="#' + CSS.escape(id) + '"]'
+    );
+    const li = tocLink ? tocLink.closest("li") : null;
+    const sublist = li ? li.querySelector(":scope > ul.toc-sublist") : null;
+    return { h2, sublist };
+  });
 
-        const tocLink = document.querySelector(
-          'ul.toc-content a[href="#' + CSS.escape(id) + '"]'
-        );
-        if (!tocLink) return;
+  let ticking = false;
 
-        const li = tocLink.closest("li");
-        if (!li) return;
+  const updateActive = () => {
+    ticking = false;
+    // 参考线：视口顶部往下 80px 的位置
+    const refLine = 80;
+    let activeIndex = -1;
 
-        const sublist = li.querySelector(":scope > ul.toc-sublist");
-        if (!sublist) return;
+    for (let i = 0; i < entries.length; i++) {
+      const rect = entries[i].h2.getBoundingClientRect();
+      // 找到最后一个顶部已经越过参考线的 h2
+      if (rect.top <= refLine) {
+        activeIndex = i;
+      } else {
+        break;
+      }
+    }
 
-        if (entry.isIntersecting) {
-          sublist.classList.add("expanded");
-        } else {
-          sublist.classList.remove("expanded");
-        }
-      });
-    },
-    { rootMargin: "0px 0px -70% 0px", threshold: 0 }
-  );
+    // 如果还没滚到第一个 h2，activeIndex 为 -1，全部收起
+    entries.forEach((entry, i) => {
+      if (!entry.sublist) return;
+      if (i === activeIndex) {
+        entry.sublist.classList.add("expanded");
+      } else {
+        entry.sublist.classList.remove("expanded");
+      }
+    });
+  };
 
-  h2Headings.forEach((h2) => observer.observe(h2));
-  window.__tocScrollObserver = observer;
+  const onScroll = () => {
+    if (!ticking) {
+      ticking = true;
+      requestAnimationFrame(updateActive);
+    }
+  };
+
+  window.addEventListener("scroll", onScroll, { passive: true });
+  // 初次进入页面时也执行一次
+  updateActive();
+
+  window.__tocScrollCleanup = () => {
+    window.removeEventListener("scroll", onScroll);
+  };
 });
 
 document.addEventListener("nav", () => {
   window.addEventListener("beforeunload", () => {
-    if (window.__tocScrollObserver) {
-      window.__tocScrollObserver.disconnect();
-      window.__tocScrollObserver = null;
+    if (window.__tocScrollCleanup) {
+      window.__tocScrollCleanup();
+      window.__tocScrollCleanup = null;
     }
   });
 });
